@@ -4,12 +4,19 @@ import os
 
 private let log = Logger(subsystem: "io.rlew.mousebinder", category: "eventtap")
 
-/// Owns the `CGEventTap` on `.otherMouseDown`. This is the whole event core —
-/// the menu-bar app just hangs it off `AppState` and feeds it closures.
+/// Owns the `CGEventTap` on `.otherMouseDown`/`.otherMouseUp`. This is the whole
+/// event core — the menu-bar app just hangs it off `AppState` and feeds it closures.
 ///
 /// The tap is an *active* session tap (not listen-only) so it can swallow the
 /// bound button by returning `nil`. The callback is a C function pointer, so we
 /// hand `self` through `userInfo` and bounce back via `Unmanaged`.
+///
+/// Down and up must be swallowed as a *pair*: if only the down is eaten, the
+/// matching up sails through to whatever is under the cursor — which, when the
+/// action just opened Mission Control, is the Exposé overlay. An orphaned
+/// button-up there can wedge WindowServer click tracking so left/right clicks
+/// stop registering system-wide. `pendingSwallowedUps` records which buttons had
+/// their down swallowed so the corresponding up is swallowed too.
 ///
 /// Robustness (the bit the original design note missed): the OS will silently
 /// disable the tap on `.tapDisabledByTimeout` / `.tapDisabledByUserInput` (and
@@ -18,6 +25,10 @@ private let log = Logger(subsystem: "io.rlew.mousebinder", category: "eventtap")
 final class EventTapController {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    /// Buttons whose `.otherMouseDown` we swallowed and whose `.otherMouseUp` is
+    /// therefore still owed a swallow. Only touched from the tap callback on the
+    /// main run loop, so no locking needed.
+    fileprivate var pendingSwallowedUps: Set<Int> = []
 
     // Hooks set by the owner. All are invoked synchronously on the main run loop
     // (the tap is attached there), so they may touch main-actor state directly.
@@ -47,7 +58,9 @@ final class EventTapController {
             stop()
         }
 
-        let mask: CGEventMask = 1 << CGEventType.otherMouseDown.rawValue
+        let mask: CGEventMask =
+            1 << CGEventType.otherMouseDown.rawValue |
+            1 << CGEventType.otherMouseUp.rawValue
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -68,6 +81,10 @@ final class EventTapController {
 
         eventTap = tap
         runLoopSource = source
+        // A pending swallow can't survive a tap rebuild: the up it was waiting for
+        // may have been delivered while no tap was listening, and a stale entry
+        // would eat the up of a later ordinary press of the same button.
+        pendingSwallowedUps.removeAll()
         log.info("event tap started")
         return true
     }
@@ -80,6 +97,7 @@ final class EventTapController {
         if let tap = eventTap { CFMachPortInvalidate(tap) }
         eventTap = nil
         runLoopSource = nil
+        pendingSwallowedUps.removeAll()
     }
 
     /// Revive a tap the OS auto-disabled.
@@ -113,9 +131,18 @@ private func eventTapCallback(
         return nil
     }
 
+    let button = Int(event.getIntegerValueField(.mouseEventButtonNumber))
+
+    // Pair the swallow: an up whose down we ate must be eaten too, whatever mode
+    // we're in now — otherwise it lands as an orphan in whatever the action just
+    // opened (e.g. the Mission Control overlay) and can wedge click routing.
+    if type == .otherMouseUp {
+        if controller.pendingSwallowedUps.remove(button) != nil { return nil }
+        return Unmanaged.passUnretained(event)
+    }
+
     guard type == .otherMouseDown else { return Unmanaged.passUnretained(event) }
 
-    let button = Int(event.getIntegerValueField(.mouseEventButtonNumber))
     controller.onButtonSeen(button)   // diagnostic
 
     // Capture mode: bind the next non-primary button (>= 2 — middle click or a
@@ -124,6 +151,7 @@ private func eventTapCallback(
     if controller.isCapturing() {
         if button >= 2 {
             controller.onCapture(button)
+            controller.pendingSwallowedUps.insert(button)
             return nil                // swallow the click we captured
         }
         return Unmanaged.passUnretained(event)
@@ -140,7 +168,11 @@ private func eventTapCallback(
         // through so a button that can't run its action keeps its native behaviour
         // instead of becoming a completely dead button.
         let fired = controller.onActionFired(binding.action)
-        return (binding.swallow && fired) ? nil : Unmanaged.passUnretained(event)
+        if binding.swallow && fired {
+            controller.pendingSwallowedUps.insert(button)
+            return nil
+        }
+        return Unmanaged.passUnretained(event)
     }
 
     return Unmanaged.passUnretained(event)
