@@ -17,6 +17,14 @@ macOS has no built-in way to map a spare mouse button to Mission Control. MouseB
 
 ## Install
 
+With [Homebrew](https://brew.sh) (Apple silicon only):
+
+```sh
+brew install --cask ryanlewis/tap/mousebinder
+```
+
+Or manually:
+
 1. Download the latest `MouseBinder-x.y.z.zip` from [Releases](https://github.com/ryanlewis/mousebinder/releases).
 2. Unzip it and move `MouseBinder.app` to `/Applications`.
 3. Open the app and grant Accessibility access when asked (System Settings → Privacy & Security → Accessibility). MouseBinder cannot see mouse buttons without it.
