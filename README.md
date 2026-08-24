@@ -1,0 +1,52 @@
+# MouseBinder
+
+A macOS menu-bar app that binds extra mouse buttons (middle or side) to Mission Control, App Exposé, Launchpad, or Show Desktop.
+
+![MouseBinder settings window](docs/settings.png)
+
+## What it does
+
+macOS has no built-in way to map a spare mouse button to Mission Control. MouseBinder adds one. You click Bind in its settings, press a mouse button, and that button now triggers the action.
+
+- Binds middle click and any side button. Left and right click can't be bound.
+- Four actions: Mission Control, App Exposé, Launchpad, Show Desktop.
+- Keeps an ignore list. While a listed app is focused, bound buttons behave normally, so a browser can keep back/forward.
+- Runs as a menu-bar item with an on/off toggle and an optional Open at Login setting.
+- Rebuilds its event tap after sleep, wake, and fast user switching.
+- Triggers actions through the Dock directly, so they work even if you changed or disabled the matching keyboard shortcuts.
+
+## Install
+
+1. Download the latest `MouseBinder-x.y.z.zip` from [Releases](https://github.com/ryanlewis/mousebinder/releases).
+2. Unzip it and move `MouseBinder.app` to `/Applications`.
+3. Open the app and grant Accessibility access when asked (System Settings → Privacy & Security → Accessibility). MouseBinder cannot see mouse buttons without it.
+
+The app is signed and notarized. It requires macOS 15 or later.
+
+## Usage
+
+![MouseBinder menu-bar menu](docs/menubar.png)
+
+Click the mouse icon in the menu bar, then Settings. Each action row has a Bind button: click it, then press a mouse button within 8 seconds. If you bind a button that another action already uses, the button moves to the new action.
+
+To exempt an app, add it under "Ignore in These Apps". While that app is focused, bound buttons keep their normal behaviour.
+
+## How it works
+
+MouseBinder installs a `CGEventTap` on `otherMouseDown` events, which is what the Accessibility permission is for. When you press a bound button, the app swallows the click and sends the Dock the same internal notification the system uses to trigger the action. It does not synthesise keyboard shortcuts, so your shortcut settings don't matter.
+
+## Build from source
+
+You need Swift 6 (ships with Xcode) and [just](https://github.com/casey/just).
+
+```sh
+git clone https://github.com/ryanlewis/mousebinder && cd mousebinder
+just build                # builds and assembles MouseBinder.app (dev-signed)
+open MouseBinder.app
+```
+
+If you rebuild often, run `just dev-cert` once. It creates a local signing certificate so macOS keeps your Accessibility grant across rebuilds instead of asking again each time. `just release` is the maintainer recipe for Developer ID signing and notarization. Run `just` with no arguments to list all recipes.
+
+## License
+
+[MIT](LICENSE)
