@@ -32,6 +32,8 @@ final class AppState: ObservableObject {
     private let store = BindingStore()
     private let tap = EventTapController()
     private var captureTimeout: Task<Void, Never>?
+    /// Live while Accessibility is ungranted — see `pollUntilPermissionGranted`.
+    private var permissionPoll: Task<Void, Never>?
     /// App icons cached by bundle id so SwiftUI re-renders don't re-hit Launch
     /// Services + disk on every frame (see `icon(for:)`).
     private var iconCache: [String: NSImage] = [:]
@@ -169,7 +171,32 @@ final class AppState: ObservableObject {
 
     private func startTap() {
         permissionGranted = tap.start()
-        if !permissionGranted { promptForAccessibility() }
+        if !permissionGranted {
+            promptForAccessibility()
+            pollUntilPermissionGranted()
+        }
+    }
+
+    /// macOS posts no notification when the user ticks the Accessibility box in
+    /// System Settings, so an ungranted app has no event to react to — without
+    /// this, the tap stays dead and the menu keeps showing "Grant Accessibility…"
+    /// until a relaunch. Poll cheaply (`AXIsProcessTrusted`, no prompt, no log
+    /// spam) and bring the tap up the moment the grant lands. Self-terminating:
+    /// exits once the tap starts, and re-arms only via a later failed `startTap`.
+    private func pollUntilPermissionGranted() {
+        guard permissionPoll == nil else { return }
+        permissionPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                guard AXIsProcessTrusted() else { continue }
+                self.permissionGranted = self.tap.start()
+                if self.permissionGranted {
+                    self.permissionPoll = nil
+                    return
+                }
+            }
+        }
     }
 
     /// The OS can tear down the session tap across sleep/wake or fast-user-switch
@@ -180,7 +207,13 @@ final class AppState: ObservableObject {
         let nc = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.permissionGranted = self?.tap.start() ?? false }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.permissionGranted = self.tap.start()
+                    // Permission revoked while we slept: watch for it coming back
+                    // (no prompt — waking the Mac shouldn't nag).
+                    if !self.permissionGranted { self.pollUntilPermissionGranted() }
+                }
             }
         }
     }
