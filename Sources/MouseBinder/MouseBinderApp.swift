@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct MouseBinderApp: App {
     @StateObject private var state = AppState()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         // Default (.menu) style => a native NSMenu: items render as real menu rows.
@@ -20,6 +21,23 @@ struct MouseBinderApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultLaunchBehavior(.suppressed)
+
+        Window("About MouseBinder", id: "about") {
+            AboutView()
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+        .defaultLaunchBehavior(.suppressed)
+        // Replace the standard about panel in the app menu (visible whenever a
+        // window has made the app regular) so both routes open this window.
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About MouseBinder") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: "about")
+                }
+            }
+        }
     }
 }
 
@@ -47,8 +65,10 @@ struct MenuContent: View {
 
         Toggle("Enabled", isOn: $state.isEnabled)
 
-        Button("Settings…") { openSettings() }
+        Button("Settings…") { open("settings") }
             .keyboardShortcut(",", modifiers: .command)
+
+        Button("About MouseBinder") { open("about") }
 
         Divider()
 
@@ -56,9 +76,9 @@ struct MenuContent: View {
             .keyboardShortcut("q", modifiers: .command)
     }
 
-    private func openSettings() {
+    private func open(_ id: String) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        openWindow(id: "settings")
+        openWindow(id: id)
     }
 }

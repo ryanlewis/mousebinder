@@ -65,9 +65,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 480)
         .frame(minHeight: 620)
-        // Show a Dock icon only while this window is on screen.
-        .onAppear { NSApp.setActivationPolicy(.regular) }
-        .onDisappear { NSApp.setActivationPolicy(.accessory) }
+        // Show a Dock icon only while a window is on screen (see ActivationPolicy).
+        .onAppear { ActivationPolicy.windowAppeared() }
+        .onDisappear { ActivationPolicy.windowClosed() }
     }
 
     private func appIcon(for app: IgnoredApp) -> some View {
