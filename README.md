@@ -53,7 +53,7 @@ just build                # builds and assembles MouseBinder.app (dev-signed)
 open MouseBinder.app
 ```
 
-If you rebuild often, run `just dev-cert` once. It creates a local signing certificate so macOS keeps your Accessibility grant across rebuilds instead of asking again each time. `just release` is the maintainer recipe for Developer ID signing and notarization. Run `just` with no arguments to list all recipes.
+`just build` signs with the best identity it finds: a Developer ID certificate if you have one (dev and release builds then share one Accessibility grant), otherwise the local certificate created by `just dev-cert` (grant survives rebuilds), otherwise ad-hoc (macOS re-asks for the Accessibility grant after every rebuild). If you rebuild often and have no Developer ID cert, run `just dev-cert` once. `just release` is the maintainer recipe for Developer ID signing and notarization. Run `just` with no arguments to list all recipes.
 
 ## License
 

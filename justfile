@@ -28,20 +28,39 @@ build config="release":
         cp Resources/AppIcon.icns "{{APP}}/Contents/Resources/AppIcon.icns"
     fi
 
-    # Prefer a stable self-signed identity so the TCC (Accessibility) grant survives
-    # rebuilds. Falls back to ad-hoc, which re-pins the grant to the cdhash each build
-    # (=> re-grant every rebuild). Run `just dev-cert` once to set it up.
-    SIGN_IDENTITY="MouseBinder Dev"
-    if security find-identity -v -p codesigning | grep -qF "\"$SIGN_IDENTITY\""; then
-        echo "==> signing with stable identity: $SIGN_IDENTITY"
-        codesign --force --sign "$SIGN_IDENTITY" --identifier "{{BUNDLE_ID}}" "{{APP}}"
+    # Signing preference, best TCC behaviour first:
+    #   1. Developer ID — same identity family as `just release`, so dev and release
+    #      builds share one TCC (Accessibility) row and grants survive switching
+    #      between them. TCC keeps ONE row per bundle id, pinned to whichever
+    #      signature last prompted; two differently-signed copies fight over it.
+    #   2. "MouseBinder Dev" (local self-signed; `just dev-cert`) — grant survives
+    #      rebuilds, but not switching to/from a Developer ID copy.
+    #   3. Ad-hoc — grant is pinned to the cdhash, dies every rebuild.
+    IDENTITY="$(security find-identity -v -p codesigning \
+        | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+    if [ -z "$IDENTITY" ] && security find-identity -v -p codesigning | grep -qF '"MouseBinder Dev"'; then
+        IDENTITY="MouseBinder Dev"
+    fi
+    if [ -n "$IDENTITY" ]; then
+        echo "==> signing with: $IDENTITY"
+        codesign --force --sign "$IDENTITY" --identifier "{{BUNDLE_ID}}" "{{APP}}"
     else
-        echo "==> ad-hoc signing (no '$SIGN_IDENTITY' cert — grant won't survive rebuilds)"
+        echo "==> ad-hoc signing (no signing cert found — grant won't survive rebuilds)"
         codesign --force --sign - --identifier "{{BUNDLE_ID}}" "{{APP}}"
     fi
 
     echo "==> done: {{APP}}"
     echo "    Run it with:  open {{APP}}"
+
+    # Two live copies both tap .otherMouseDown and double-fire every binding
+    # (Mission Control opens and instantly closes — looks like a broken binding).
+    RUNNING="$(pgrep -fl 'MouseBinder\.app/Contents/MacOS/MouseBinder' | grep -v "$PWD" || true)"
+    if [ -n "$RUNNING" ]; then
+        echo ""
+        echo "warning: MouseBinder is already running from another path — quit it"
+        echo "before launching this build, or every binding fires twice:"
+        echo "$RUNNING"
+    fi
 
 # Build, Developer-ID-sign, notarize, and staple a distributable zip in dist/
 release:
