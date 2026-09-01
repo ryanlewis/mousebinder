@@ -31,6 +31,20 @@ Or manually:
 
 The app is signed and notarized. It requires macOS 15 or later.
 
+### Verify a download
+
+Each release also carries `MouseBinder-x.y.z.sha256` (checksums of the zip and DMG) and `MouseBinder-x.y.z.sha256.sigstore.json`, a [Sigstore](https://www.sigstore.dev) signature over that checksum file made with the maintainer's GitHub identity and recorded in the public Rekor transparency log. To check a download, put the three files in one directory and run:
+
+```sh
+cosign verify-blob MouseBinder-x.y.z.sha256 \
+  --bundle MouseBinder-x.y.z.sha256.sigstore.json \
+  --certificate-identity 427747+ryanlewis@users.noreply.github.com \
+  --certificate-oidc-issuer https://github.com/login/oauth
+shasum -a 256 -c MouseBinder-x.y.z.sha256 --ignore-missing
+```
+
+The first command confirms the checksum file was signed by that GitHub account; the second confirms your download matches it. `cosign` is available from Homebrew (`brew install cosign`). macOS separately verifies the Developer ID signature and notarization when you first open the app.
+
 ## Usage
 
 ![MouseBinder menu-bar menu](docs/menubar.png)
@@ -53,7 +67,7 @@ just build                # builds and assembles MouseBinder.app (dev-signed)
 open MouseBinder.app
 ```
 
-`just build` signs with the best identity it finds: a Developer ID certificate if you have one (dev and release builds then share one Accessibility grant), otherwise the local certificate created by `just dev-cert` (grant survives rebuilds), otherwise ad-hoc (macOS re-asks for the Accessibility grant after every rebuild). If you rebuild often and have no Developer ID cert, run `just dev-cert` once. `just release` is the maintainer recipe for Developer ID signing and notarization; it produces both a zip and a DMG in `dist/`, each notarized and stapled. `just dmg` packages whatever `MouseBinder.app` is present into an unsigned DMG, handy for checking the image layout without credentials. Run `just` with no arguments to list all recipes.
+`just build` signs with the best identity it finds: a Developer ID certificate if you have one (dev and release builds then share one Accessibility grant), otherwise the local certificate created by `just dev-cert` (grant survives rebuilds), otherwise ad-hoc (macOS re-asks for the Accessibility grant after every rebuild). If you rebuild often and have no Developer ID cert, run `just dev-cert` once. `just release` is the maintainer recipe for Developer ID signing and notarization; it produces both a zip and a DMG in `dist/`, each notarized and stapled, plus the checksum file and its Sigstore signature (needs `cosign`, pinned in `mise.toml`). `just publish` drafts the GitHub release with those attached. `just dmg` packages whatever `MouseBinder.app` is present into an unsigned DMG, handy for checking the image layout without credentials. Run `just` with no arguments to list all recipes.
 
 ## License
 

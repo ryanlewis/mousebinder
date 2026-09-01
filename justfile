@@ -4,6 +4,10 @@ APP := "MouseBinder.app"
 BUNDLE_ID := "io.rlew.mousebinder"
 NOTARY_PROFILE := "mousebinder-notary"
 VOLNAME := "MouseBinder"
+# Identity in the Sigstore certificate when signing in with GitHub: the account's
+# no-reply address because its email is private. Changes if that setting does.
+SIGSTORE_IDENTITY := "427747+ryanlewis@users.noreply.github.com"
+SIGSTORE_ISSUER := "https://github.com/login/oauth"
 
 default:
     @just --list
@@ -82,6 +86,10 @@ release:
         echo "Create one in Xcode -> Settings -> Accounts -> Manage Certificates." >&2
         exit 1
     fi
+    if ! command -v cosign >/dev/null; then
+        echo "error: cosign not on PATH — run 'mise install' in this directory (see mise.toml)." >&2
+        exit 1
+    fi
 
     echo "==> swift build -c release"
     swift build -c release
@@ -144,8 +152,28 @@ release:
     spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
     xcrun stapler validate "$DMG"
 
+    # Checksums for both downloads, then a keyless Sigstore signature over the
+    # checksum file: cosign opens a browser, you sign in with GitHub, and the
+    # signature is recorded in the public Rekor transparency log under that
+    # identity. Users verify with the commands in README "Verify a download".
+    SUMS="dist/MouseBinder-$VERSION.sha256"
+    echo "==> writing $SUMS"
+    (cd dist && shasum -a 256 "MouseBinder-$VERSION.zip" "MouseBinder-$VERSION.dmg") > "$SUMS"
+    cat "$SUMS"
+
+    echo "==> signing $SUMS with Sigstore (browser sign-in)"
+    rm -f "$SUMS.sigstore.json"
+    cosign sign-blob --yes --bundle "$SUMS.sigstore.json" "$SUMS"
+    chmod 644 "$SUMS.sigstore.json"   # cosign writes it 0600
+    cosign verify-blob --bundle "$SUMS.sigstore.json" \
+        --certificate-identity "{{SIGSTORE_IDENTITY}}" \
+        --certificate-oidc-issuer "{{SIGSTORE_ISSUER}}" "$SUMS"
+
     echo "==> done: $ZIP"
     echo "          $DMG"
+    echo "          $SUMS"
+    echo "          $SUMS.sigstore.json"
+    echo "    Next: tag v$VERSION, then 'just publish' to draft the GitHub release."
 
 # Package the current MouseBinder.app into dist/MouseBinder-VERSION.dmg (unsigned; `release` signs it)
 dmg:
@@ -276,6 +304,44 @@ dmg:
     hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -quiet -o "$DMG"
 
     echo "==> done: $DMG"
+
+# Draft the GitHub release for the tagged version with the dist/ artifacts attached
+publish:
+    #!/usr/bin/env bash
+    # Uploads the zip, DMG, checksum file, and Sigstore bundle from `just release`
+    # to a draft release on tag vVERSION, so the notes can be written in the UI
+    # before it goes live. Refuses to run if the tag is missing or a release for
+    # it already exists. Prints the Homebrew cask bump for ryanlewis/homebrew-tap.
+    set -euo pipefail
+
+    VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+    TAG="v$VERSION"
+    ZIP="dist/MouseBinder-$VERSION.zip"
+    DMG="dist/MouseBinder-$VERSION.dmg"
+    SUMS="dist/MouseBinder-$VERSION.sha256"
+    BUNDLE="$SUMS.sigstore.json"
+
+    for f in "$ZIP" "$DMG" "$SUMS" "$BUNDLE"; do
+        [ -f "$f" ] || { echo "error: $f missing — run 'just release' first." >&2; exit 1; }
+    done
+    (cd dist && shasum -a 256 -c "MouseBinder-$VERSION.sha256" >/dev/null) \
+        || { echo "error: dist/ artifacts don't match $SUMS — rerun 'just release'." >&2; exit 1; }
+    git rev-parse -q --verify "refs/tags/$TAG" >/dev/null \
+        || { echo "error: tag $TAG not found — tag the release commit first." >&2; exit 1; }
+    if gh release view "$TAG" >/dev/null 2>&1; then
+        echo "error: release $TAG already exists on GitHub." >&2
+        exit 1
+    fi
+
+    echo "==> drafting release $TAG"
+    gh release create "$TAG" --draft --verify-tag --title "MouseBinder $VERSION" \
+        --generate-notes "$ZIP" "$DMG" "$SUMS" "$BUNDLE"
+
+    echo ""
+    echo "Draft created. Edit the notes and publish it on GitHub, then bump the cask:"
+    echo "  ryanlewis/homebrew-tap Casks/mousebinder.rb"
+    echo "    version \"$VERSION\""
+    echo "    sha256 \"$(shasum -a 256 "$ZIP" | cut -d' ' -f1)\""
 
 # Create the local self-signed "MouseBinder Dev" cert so TCC grants survive rebuilds
 dev-cert name="MouseBinder Dev":
