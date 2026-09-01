@@ -3,6 +3,7 @@
 APP := "MouseBinder.app"
 BUNDLE_ID := "io.rlew.mousebinder"
 NOTARY_PROFILE := "mousebinder-notary"
+VOLNAME := "MouseBinder"
 
 default:
     @just --list
@@ -62,7 +63,7 @@ build config="release":
         echo "$RUNNING"
     fi
 
-# Build, Developer-ID-sign, notarize, and staple a distributable zip in dist/
+# Build, Developer-ID-sign, notarize, and staple a distributable zip + DMG in dist/
 release:
     #!/usr/bin/env bash
     # One-time setup required first:
@@ -120,10 +121,61 @@ release:
     rm -f "$ZIP"
     ditto -c -k --keepParent "{{APP}}" "$ZIP"
 
+    # The DMG is a second distributable of the same stapled app, with an
+    # /Applications symlink for drag-install. It needs its own signature and its
+    # own notarization ticket: the app's ticket covers the bundle inside, not the
+    # disk image Gatekeeper assesses when the user opens the download.
+    DMG="dist/MouseBinder-$VERSION.dmg"
+    echo "==> building $DMG from the stapled app"
+    "{{just_executable()}}" dmg
+
+    echo "==> signing $DMG"
+    codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+
+    echo "==> submitting $DMG to Apple notary service (waits for verdict)"
+    xcrun notarytool submit "$DMG" --keychain-profile "{{NOTARY_PROFILE}}" --wait
+
+    echo "==> stapling ticket to $DMG"
+    xcrun stapler staple "$DMG"
+
     echo "==> Gatekeeper check"
     spctl --assess --type exec --verbose=2 "{{APP}}"
+    xcrun stapler validate "{{APP}}"
+    spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+    xcrun stapler validate "$DMG"
 
     echo "==> done: $ZIP"
+    echo "          $DMG"
+
+# Package the current MouseBinder.app into dist/MouseBinder-VERSION.dmg (unsigned; `release` signs it)
+dmg:
+    #!/usr/bin/env bash
+    # Plain hdiutil, no create-dmg dependency: a read-only compressed image holding
+    # the app next to an /Applications symlink, so Finder shows the usual
+    # drag-to-install layout. Runs on whatever {{APP}} is present, so it also
+    # works on a dev build to check the image mounts and has the right contents.
+    set -euo pipefail
+
+    if [ ! -d "{{APP}}" ]; then
+        echo "error: {{APP}} not found — run 'just build' or 'just release' first." >&2
+        exit 1
+    fi
+
+    VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+    DMG="dist/MouseBinder-$VERSION.dmg"
+
+    STAGING="$(mktemp -d)"
+    trap 'rm -rf "$STAGING"' EXIT
+    # ditto keeps the signature, xattrs, and any stapled ticket intact.
+    ditto "{{APP}}" "$STAGING/{{APP}}"
+    ln -s /Applications "$STAGING/Applications"
+
+    mkdir -p dist
+    rm -f "$DMG"
+    hdiutil create -volname "{{VOLNAME}}" -srcfolder "$STAGING" \
+        -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov -quiet "$DMG"
+
+    echo "==> done: $DMG"
 
 # Create the local self-signed "MouseBinder Dev" cert so TCC grants survive rebuilds
 dev-cert name="MouseBinder Dev":

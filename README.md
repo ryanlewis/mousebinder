@@ -25,8 +25,8 @@ brew install --cask ryanlewis/tap/mousebinder
 
 Or manually:
 
-1. Download the latest `MouseBinder-x.y.z.zip` from [Releases](https://github.com/ryanlewis/mousebinder/releases).
-2. Unzip it and move `MouseBinder.app` to `/Applications`.
+1. Download the latest `MouseBinder-x.y.z.dmg` from [Releases](https://github.com/ryanlewis/mousebinder/releases). A `.zip` of the same app is attached too if you prefer.
+2. Open the disk image and drag `MouseBinder.app` onto the Applications folder next to it. (For the zip: unzip it and move `MouseBinder.app` to `/Applications`.)
 3. Open the app and grant Accessibility access when asked (System Settings → Privacy & Security → Accessibility). MouseBinder cannot see mouse buttons without it.
 
 The app is signed and notarized. It requires macOS 15 or later.
@@ -53,7 +53,7 @@ just build                # builds and assembles MouseBinder.app (dev-signed)
 open MouseBinder.app
 ```
 
-`just build` signs with the best identity it finds: a Developer ID certificate if you have one (dev and release builds then share one Accessibility grant), otherwise the local certificate created by `just dev-cert` (grant survives rebuilds), otherwise ad-hoc (macOS re-asks for the Accessibility grant after every rebuild). If you rebuild often and have no Developer ID cert, run `just dev-cert` once. `just release` is the maintainer recipe for Developer ID signing and notarization. Run `just` with no arguments to list all recipes.
+`just build` signs with the best identity it finds: a Developer ID certificate if you have one (dev and release builds then share one Accessibility grant), otherwise the local certificate created by `just dev-cert` (grant survives rebuilds), otherwise ad-hoc (macOS re-asks for the Accessibility grant after every rebuild). If you rebuild often and have no Developer ID cert, run `just dev-cert` once. `just release` is the maintainer recipe for Developer ID signing and notarization; it produces both a zip and a DMG in `dist/`, each notarized and stapled. `just dmg` packages whatever `MouseBinder.app` is present into an unsigned DMG, handy for checking the image layout without credentials. Run `just` with no arguments to list all recipes.
 
 ## License
 
