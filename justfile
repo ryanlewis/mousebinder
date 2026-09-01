@@ -150,10 +150,13 @@ release:
 # Package the current MouseBinder.app into dist/MouseBinder-VERSION.dmg (unsigned; `release` signs it)
 dmg:
     #!/usr/bin/env bash
-    # Plain hdiutil, no create-dmg dependency: a read-only compressed image holding
-    # the app next to an /Applications symlink, so Finder shows the usual
-    # drag-to-install layout. Runs on whatever {{APP}} is present, so it also
-    # works on a dev build to check the image mounts and has the right contents.
+    # Plain hdiutil, no create-dmg dependency. The image holds the app next to an
+    # /Applications symlink, laid out as the usual drag-to-install window: fixed
+    # size, big icons, a background with an arrow between them. Finder stores that
+    # layout in the volume's .DS_Store, and only Finder can write one, so the
+    # recipe builds a read-write image, has Finder arrange it via AppleScript, then
+    # converts to the compressed read-only image that ships. Runs on whatever
+    # {{APP}} is present, so it also works on a dev build to check the layout.
     set -euo pipefail
 
     if [ ! -d "{{APP}}" ]; then
@@ -164,16 +167,106 @@ dmg:
     VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
     DMG="dist/MouseBinder-$VERSION.dmg"
 
-    STAGING="$(mktemp -d)"
-    trap 'rm -rf "$STAGING"' EXIT
+    # Window geometry in Finder points. The background arrow is drawn to match
+    # these (see scripts/make-dmg-background.swift), so change them together.
+    WIN_W=660; WIN_H=400; ICON=128
+    APP_X=180; APPS_X=480; ICON_Y=190
+
+    TMP="$(mktemp -d)"
+    MOUNT=""
+    cleanup() {
+        [ -n "$MOUNT" ] && hdiutil detach "$MOUNT" -quiet -force >/dev/null 2>&1 || true
+        rm -rf "$TMP"
+    }
+    trap cleanup EXIT
+
+    echo "==> staging"
+    STAGING="$TMP/staging"
+    mkdir -p "$STAGING/.background"
     # ditto keeps the signature, xattrs, and any stapled ticket intact.
     ditto "{{APP}}" "$STAGING/{{APP}}"
     ln -s /Applications "$STAGING/Applications"
+    swift scripts/make-dmg-background.swift "$STAGING/.background/background.png" >/dev/null
+    # Volume icon: the app icon, shown on the mounted disk in Finder and the Dock.
+    cp Resources/AppIcon.icns "$STAGING/.VolumeIcon.icns"
 
+    echo "==> creating read-write image"
+    RW="$TMP/rw.dmg"
+    hdiutil create -volname "{{VOLNAME}}" -srcfolder "$STAGING" -fs HFS+ \
+        -format UDRW -size 64m -ov -quiet "$RW"
+    MOUNT="$(hdiutil attach -readwrite -noverify -noautoopen "$RW" \
+        | awk -F'\t' '/\/Volumes\// {print $NF}')"
+    SetFile -a C "$MOUNT"   # "has custom icon" flag, so .VolumeIcon.icns is used
+
+    echo "==> laying out the Finder window"
+    # Finder opens the image's root at the saved bounds/view/positions. Toolbar
+    # and status bar off gives the plain drag-install window rather than a
+    # browser window. Needs Automation permission for Finder on first run.
+    osascript - "$MOUNT" "$WIN_W" "$WIN_H" "$ICON" "$APP_X" "$APPS_X" "$ICON_Y" <<'EOS'
+    on run argv
+        set mountPath to item 1 of argv
+        set winW to (item 2 of argv) as integer
+        set winH to (item 3 of argv) as integer
+        set iconSize to (item 4 of argv) as integer
+        set appX to (item 5 of argv) as integer
+        set appsX to (item 6 of argv) as integer
+        set iconY to (item 7 of argv) as integer
+        set vol to POSIX file mountPath as alias
+        tell application "Finder"
+            tell disk (name of vol)
+                open
+                set win to container window
+                set current view of win to icon view
+                set toolbar visible of win to false
+                set statusbar visible of win to false
+                try
+                    set pathbar visible of win to false
+                end try
+                set sidebar width of win to 0
+                set bounds of win to {100, 100, 100 + winW, 100 + winH}
+                set opts to icon view options of win
+                set arrangement of opts to not arranged
+                set icon size of opts to iconSize
+                set text size of opts to 13
+                set label position of opts to bottom
+                set shows icon preview of opts to false
+                set background picture of opts to file ".background:background.png"
+                set position of item "MouseBinder.app" to {appX, iconY}
+                set position of item "Applications" to {appsX, iconY}
+                -- Park the housekeeping files outside the window for anyone
+                -- who has Finder showing hidden files.
+                repeat with n in {".background", ".fseventsd", ".VolumeIcon.icns"}
+                    try
+                        set position of item n to {winW + 200, iconY}
+                    end try
+                end repeat
+                close
+                open
+                update every item
+                delay 1
+                close
+            end tell
+        end tell
+    end run
+    EOS
+
+    # Finder writes .DS_Store lazily; wait for it before detaching.
+    for _ in $(seq 1 20); do
+        [ -f "$MOUNT/.DS_Store" ] && break
+        sleep 0.5
+    done
+    if [ ! -f "$MOUNT/.DS_Store" ]; then
+        echo "error: Finder did not write .DS_Store — layout would be lost." >&2
+        exit 1
+    fi
+    sync
+    hdiutil detach "$MOUNT" -quiet
+    MOUNT=""
+
+    echo "==> converting to compressed read-only image"
     mkdir -p dist
     rm -f "$DMG"
-    hdiutil create -volname "{{VOLNAME}}" -srcfolder "$STAGING" \
-        -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov -quiet "$DMG"
+    hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -quiet -o "$DMG"
 
     echo "==> done: $DMG"
 
