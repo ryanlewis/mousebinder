@@ -173,9 +173,9 @@ dmg:
     APP_X=180; APPS_X=480; ICON_Y=190
 
     TMP="$(mktemp -d)"
-    MOUNT=""
+    DEV=""
     cleanup() {
-        [ -n "$MOUNT" ] && hdiutil detach "$MOUNT" -quiet -force >/dev/null 2>&1 || true
+        [ -n "$DEV" ] && hdiutil detach "$DEV" -quiet -force >/dev/null 2>&1 || true
         rm -rf "$TMP"
     }
     trap cleanup EXIT
@@ -191,11 +191,17 @@ dmg:
     cp Resources/AppIcon.icns "$STAGING/.VolumeIcon.icns"
 
     echo "==> creating read-write image"
+    # Finder addresses disks by volume name, so a same-named volume already
+    # mounted (say, the previous build left open) would make the AppleScript
+    # below lay out the wrong disk. Build under a unique name and rename at the
+    # end; the layout lives in .DS_Store and survives the rename.
     RW="$TMP/rw.dmg"
-    hdiutil create -volname "{{VOLNAME}}" -srcfolder "$STAGING" -fs HFS+ \
+    BUILD_VOL="{{VOLNAME}}-build-$$"
+    hdiutil create -volname "$BUILD_VOL" -srcfolder "$STAGING" -fs HFS+ \
         -format UDRW -size 64m -ov -quiet "$RW"
-    MOUNT="$(hdiutil attach -readwrite -noverify -noautoopen "$RW" \
-        | awk -F'\t' '/\/Volumes\// {print $NF}')"
+    ATTACH="$(hdiutil attach -readwrite -noverify -noautoopen "$RW")"
+    DEV="$(printf '%s\n' "$ATTACH" | awk 'NR==1 {print $1}')"
+    MOUNT="$(printf '%s\n' "$ATTACH" | awk -F'\t' '/\/Volumes\// {print $NF}')"
     SetFile -a C "$MOUNT"   # "has custom icon" flag, so .VolumeIcon.icns is used
 
     echo "==> laying out the Finder window"
@@ -260,8 +266,9 @@ dmg:
         exit 1
     fi
     sync
-    hdiutil detach "$MOUNT" -quiet
-    MOUNT=""
+    diskutil quiet rename "$MOUNT" "{{VOLNAME}}"
+    hdiutil detach "$DEV" -quiet
+    DEV=""
 
     echo "==> converting to compressed read-only image"
     mkdir -p dist
